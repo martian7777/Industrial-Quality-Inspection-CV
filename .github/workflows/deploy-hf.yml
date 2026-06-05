@@ -1,19 +1,22 @@
 name: Deploy to Hugging Face Spaces
 
-# Pushes this repo to your HF Space on every commit to main (and on demand).
+# Syncs this repo to your HF Space on every commit to main (and on demand).
 # Setup (one time):
-#   1. Create a Docker Space at https://huggingface.co/new-space (SDK = Docker).
-#   2. Create an HF access token (write) at https://huggingface.co/settings/tokens
-#   3. In GitHub: Settings > Secrets and variables > Actions
+#   1. Create an HF access token (type: WRITE) at
+#      https://huggingface.co/settings/tokens
+#   2. In GitHub: Settings > Secrets and variables > Actions
 #        - Add secret  HF_TOKEN     = <your HF write token>
 #        - (optional) Add variables HF_USERNAME / HF_SPACE if they differ
 #          from the defaults below.
+# The Space itself is created automatically on the first run — you do NOT
+# need to create it by hand.
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
-# Edit these defaults OR override them with GitHub repo variables of the same name.
+# IMPORTANT: HF_USERNAME must be your *Hugging Face* username (the token owner),
+# which may differ from your GitHub username. Override via repo variables if so.
 env:
   HF_USERNAME: ${{ vars.HF_USERNAME || 'martian7777' }}
   HF_SPACE: ${{ vars.HF_SPACE || 'industrial-quality-inspection' }}
@@ -23,20 +26,49 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          lfs: true
 
-      - name: Push to Hugging Face Space
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install huggingface_hub
+        run: pip install "huggingface_hub>=0.25"
+
+      - name: Create Space (if needed) and upload
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           if [ -z "$HF_TOKEN" ]; then
-            echo "::error::HF_TOKEN secret is not set. Add it under repo Settings > Secrets and variables > Actions."
+            echo "::error::HF_TOKEN secret is not set. Add it under Settings > Secrets and variables > Actions."
             exit 1
           fi
-          git config --global user.email "github-actions@users.noreply.github.com"
-          git config --global user.name "github-actions"
-          git push --force \
-            "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${HF_USERNAME}/${HF_SPACE}.git" \
-            HEAD:main
+          python - <<'PY'
+          import os
+          from huggingface_hub import HfApi
+
+          api = HfApi(token=os.environ["HF_TOKEN"])
+          repo_id = f"{os.environ['HF_USERNAME']}/{os.environ['HF_SPACE']}"
+
+          # Auto-create the Docker Space if it doesn't exist yet.
+          api.create_repo(
+              repo_id=repo_id,
+              repo_type="space",
+              space_sdk="docker",
+              exist_ok=True,
+          )
+
+          # Upload the repo contents (huggingface_hub handles retries/backoff).
+          api.upload_folder(
+              repo_id=repo_id,
+              repo_type="space",
+              folder_path=".",
+              commit_message=f"Sync from GitHub {os.environ.get('GITHUB_SHA','')[:7]}",
+              ignore_patterns=[
+                  ".git*", ".github/*",
+                  "**/__pycache__/*", "**/*.pyc",
+                  "backend/.pytest_cache/*", "backend/tests/*",
+                  "data/*",
+              ],
+          )
+          print(f"Deployed to https://huggingface.co/spaces/{repo_id}")
+          PY
