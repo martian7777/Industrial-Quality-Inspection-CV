@@ -50,43 +50,66 @@ jobs:
           api = HfApi(token=token)
           repo_id = f"{os.environ['HF_USERNAME']}/{os.environ['HF_SPACE']}"
 
-          # Ensure the Space exists. Non-fatal: if it was created manually (or a
-          # 429 throttles this call), we still try to upload below.
+          def looks_rate_limited(exc):
+              # HF rate limits (429) can surface as a clean HfHubHTTPError, or — when
+              # the throttled response body is an HTML/empty 429 page that the client
+              # still tries to .json() — as a bare JSONDecodeError or ValueError.
+              status = getattr(getattr(exc, "response", None), "status_code", None)
+              if status == 429:
+                  return True
+              return "429" in str(exc) or "Expecting value" in str(exc)
+
+          def with_retry(label, fn, attempts=5, delay=30):
+              for attempt in range(1, attempts + 1):
+                  try:
+                      return fn()
+                  except Exception as e:
+                      if looks_rate_limited(e) and attempt < attempts:
+                          print(f"::warning::{label}: rate limited, attempt "
+                                f"{attempt}/{attempts}. Waiting {delay}s before retry...")
+                          time.sleep(delay)
+                          delay *= 2
+                          continue
+                      raise
+
+          # Ensure the Space exists. Non-fatal: a manually-created Space (or one that
+          # survives a 429 here) is still uploaded to below.
           try:
-              api.create_repo(repo_id, repo_type="space", space_sdk="docker", exist_ok=True)
+              with_retry(
+                  "create_repo",
+                  lambda: api.create_repo(
+                      repo_id, repo_type="space", space_sdk="docker", exist_ok=True
+                  ),
+              )
               print(f"Space ready: {repo_id}")
-          except HfHubHTTPError as e:
+          except Exception as e:
               print(f"::warning::create_repo skipped ({e}). Continuing to upload "
                     f"(create the Space manually at https://huggingface.co/new-space "
                     f"if it does not exist yet).")
 
-          # Upload with retry/backoff so transient 429 rate limits self-heal.
+          # Upload with retry/backoff so transient 429 rate limits self-heal. We catch
+          # broadly here: upload_folder pre-validates the README YAML via a separate
+          # API call that, when throttled, raises JSONDecodeError rather than
+          # HfHubHTTPError — so a 429-only filter would let it crash the job.
           ignore = [
               ".git*", ".github/*",
               "**/__pycache__/*", "**/*.pyc",
               "backend/.pytest_cache/*", "backend/tests/*",
               "data/*",
           ]
-          delay = 30
-          for attempt in range(1, 5):
-              try:
-                  api.upload_folder(
+          try:
+              with_retry(
+                  "upload_folder",
+                  lambda: api.upload_folder(
                       repo_id=repo_id,
                       repo_type="space",
                       folder_path=".",
                       commit_message=f"Sync from GitHub {os.environ.get('GITHUB_SHA','')[:7]}",
                       ignore_patterns=ignore,
-                  )
-                  print(f"Deployed: https://huggingface.co/spaces/{repo_id}")
-                  break
-              except HfHubHTTPError as e:
-                  status = getattr(getattr(e, "response", None), "status_code", None)
-                  if status == 429 and attempt < 4:
-                      print(f"::warning::Rate limited (429), attempt {attempt}/4. "
-                            f"Waiting {delay}s before retry...")
-                      time.sleep(delay)
-                      delay *= 2
-                      continue
-                  print(f"::error::Upload failed: {e}")
-                  raise
+                  ),
+              )
+              print(f"Deployed: https://huggingface.co/spaces/{repo_id}")
+          except Exception as e:
+              print(f"::error::Upload failed after retries: {e}")
+              sys.exit(1)
           PY
