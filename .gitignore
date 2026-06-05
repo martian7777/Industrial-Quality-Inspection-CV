@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# Data / runtime artefacts
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Models / weights
+*.pt
+*.onnx
+*.engine
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Logs
+*.log
