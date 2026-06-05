@@ -13,12 +13,23 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
+import tempfile
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import List, Optional
 
 import cv2
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+import numpy as np
+from fastapi import (
+    Body,
+    FastAPI,
+    File,
+    HTTPException,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import database as db
@@ -257,6 +268,73 @@ async def control(action: str):
     else:
         raise HTTPException(status_code=400, detail="action must be pause|resume")
     return {"running": state.running}
+
+
+# --------------------------------------------------------------------------- #
+# Inspection source — let operators feed their own image / video / live stream
+# --------------------------------------------------------------------------- #
+_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".webp")
+_VIDEO_EXTS = (".mp4", ".avi", ".mov", ".mkv", ".webm")
+
+
+@app.get("/api/source")
+async def get_source():
+    return camera.source_info()
+
+
+@app.post("/api/source/image")
+async def set_source_image(file: UploadFile = File(...)):
+    """Upload a still image — inspected on a loop as the live feed."""
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty upload")
+    img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        raise HTTPException(status_code=400, detail="Could not decode image")
+    camera.set_image(img, label=file.filename or "uploaded image")
+    state.running = True
+    return camera.source_info()
+
+
+@app.post("/api/source/video")
+async def set_source_video(file: UploadFile = File(...)):
+    """Upload a video file — streamed frame-by-frame (looped) as the live feed."""
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty upload")
+    suffix = os.path.splitext(file.filename or "")[1].lower() or ".mp4"
+    fd, path = tempfile.mkstemp(suffix=suffix, prefix="qi_src_")
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(data)
+    ok = await asyncio.to_thread(
+        camera.set_video, path, "video", file.filename or "uploaded video"
+    )
+    if not ok:
+        os.unlink(path)
+        raise HTTPException(status_code=400, detail="Could not open video file")
+    state.running = True
+    return camera.source_info()
+
+
+@app.post("/api/source/stream")
+async def set_source_stream(payload: dict = Body(...)):
+    """Point the feed at a live stream URL (RTSP / HTTP-MJPEG) or webcam index."""
+    url = str(payload.get("url", "")).strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="Missing 'url'")
+    target = int(url) if url.isdigit() else url  # allow "0" => local webcam
+    ok = await asyncio.to_thread(camera.set_video, target, "stream", url)
+    if not ok:
+        raise HTTPException(status_code=400, detail=f"Could not open stream: {url}")
+    state.running = True
+    return camera.source_info()
+
+
+@app.post("/api/source/reset")
+async def reset_source():
+    """Revert to the built-in synthetic conveyor simulator."""
+    camera.reset_source()
+    return camera.source_info()
 
 
 # --------------------------------------------------------------------------- #

@@ -2,18 +2,19 @@ name: Deploy to Hugging Face Spaces
 
 # Syncs this repo to your HF Space on every commit to main (and on demand).
 # Setup (one time):
-#   1. Create an HF access token (type: WRITE) at
+#   1. Create the Docker Space once at https://huggingface.co/new-space
+#      (SDK = Docker, name = industrial-quality-inspection).
+#   2. Create an HF access token (type: WRITE) at
 #      https://huggingface.co/settings/tokens
-#   2. In GitHub: Settings > Secrets and variables > Actions
+#   3. In GitHub: Settings > Secrets and variables > Actions
 #        - Add secret  HF_TOKEN     = <your HF write token>
-#        - (optional) Add variables HF_USERNAME / HF_SPACE if they differ
-#          from the defaults below.
+#        - (optional) variables HF_USERNAME / HF_SPACE if different from below.
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
-# IMPORTANT: HF_USERNAME must be your *Hugging Face* username (the token owner),
+# HF_USERNAME must be your *Hugging Face* username (the token owner),
 # which may differ from your GitHub username. Override via repo variables if so.
 env:
   HF_USERNAME: ${{ vars.HF_USERNAME || 'martian7777' }}
@@ -32,7 +33,7 @@ jobs:
       - name: Install huggingface_hub
         run: pip install "huggingface_hub>=0.25"
 
-      - name: Verify token, ensure Space, and upload
+      - name: Upload to Hugging Face Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
@@ -41,51 +42,51 @@ jobs:
             exit 1
           fi
           python - <<'PY'
-          import os, sys
+          import os, sys, time
           from huggingface_hub import HfApi
           from huggingface_hub.utils import HfHubHTTPError
 
           token = os.environ["HF_TOKEN"].strip()
           api = HfApi(token=token)
-
-          # 1. Prove the token authenticates. A 429/401 here = bad/empty token,
-          #    NOT a real rate limit (anonymous calls get throttled by CloudFront).
-          try:
-              me = api.whoami()
-          except HfHubHTTPError as e:
-              print("::error::Token authentication FAILED. Your HF_TOKEN is invalid, "
-                    "expired, or not a WRITE token. Regenerate a WRITE token at "
-                    "https://huggingface.co/settings/tokens and update the GitHub secret.")
-              print(f"Details: {e}")
-              sys.exit(1)
-          print(f"Authenticated to Hugging Face as: {me.get('name')}")
-          print(f"Token role: {me.get('auth', {}).get('accessToken', {}).get('role', 'unknown')}")
-
           repo_id = f"{os.environ['HF_USERNAME']}/{os.environ['HF_SPACE']}"
 
-          # 2. Ensure the Space exists. Tolerate failures so a manually-created
-          #    Space (the reliable fallback) still gets the upload.
+          # Ensure the Space exists. Non-fatal: if it was created manually (or a
+          # 429 throttles this call), we still try to upload below.
           try:
               api.create_repo(repo_id, repo_type="space", space_sdk="docker", exist_ok=True)
               print(f"Space ready: {repo_id}")
           except HfHubHTTPError as e:
-              print(f"::warning::create_repo failed ({e}). Assuming the Space already "
-                    f"exists. If it does not, create it once at "
-                    f"https://huggingface.co/new-space (SDK = Docker, name = "
-                    f"'{os.environ['HF_SPACE']}'), then re-run this workflow.")
+              print(f"::warning::create_repo skipped ({e}). Continuing to upload "
+                    f"(create the Space manually at https://huggingface.co/new-space "
+                    f"if it does not exist yet).")
 
-          # 3. Upload the repo contents (built-in retries/backoff).
-          api.upload_folder(
-              repo_id=repo_id,
-              repo_type="space",
-              folder_path=".",
-              commit_message=f"Sync from GitHub {os.environ.get('GITHUB_SHA','')[:7]}",
-              ignore_patterns=[
-                  ".git*", ".github/*",
-                  "**/__pycache__/*", "**/*.pyc",
-                  "backend/.pytest_cache/*", "backend/tests/*",
-                  "data/*",
-              ],
-          )
-          print(f"Deployed: https://huggingface.co/spaces/{repo_id}")
+          # Upload with retry/backoff so transient 429 rate limits self-heal.
+          ignore = [
+              ".git*", ".github/*",
+              "**/__pycache__/*", "**/*.pyc",
+              "backend/.pytest_cache/*", "backend/tests/*",
+              "data/*",
+          ]
+          delay = 30
+          for attempt in range(1, 5):
+              try:
+                  api.upload_folder(
+                      repo_id=repo_id,
+                      repo_type="space",
+                      folder_path=".",
+                      commit_message=f"Sync from GitHub {os.environ.get('GITHUB_SHA','')[:7]}",
+                      ignore_patterns=ignore,
+                  )
+                  print(f"Deployed: https://huggingface.co/spaces/{repo_id}")
+                  break
+              except HfHubHTTPError as e:
+                  status = getattr(getattr(e, "response", None), "status_code", None)
+                  if status == 429 and attempt < 4:
+                      print(f"::warning::Rate limited (429), attempt {attempt}/4. "
+                            f"Waiting {delay}s before retry...")
+                      time.sleep(delay)
+                      delay *= 2
+                      continue
+                  print(f"::error::Upload failed: {e}")
+                  raise
           PY

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import random
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -64,6 +65,62 @@ class CameraSimulator:
                 if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".bmp")
             )
 
+        # Operator-supplied source, switchable at runtime via the API.
+        # Priority (highest first): user image > user video/stream > frame dir > synth.
+        self._lock = threading.Lock()
+        self._user_image: Optional[np.ndarray] = None
+        self._user_video: Optional[cv2.VideoCapture] = None
+        self._source_kind = "simulator"   # simulator | image | video | stream
+        self._source_label = ""
+
+    # ------------------------------------------------------------------ #
+    # Runtime source switching
+    # ------------------------------------------------------------------ #
+    def set_image(self, img: np.ndarray, label: str = "uploaded image") -> None:
+        """Stream a single uploaded still image on a loop."""
+        with self._lock:
+            self._release_video()
+            self._user_image = cv2.resize(img, (FRAME_W, FRAME_H))
+            self._source_kind = "image"
+            self._source_label = label
+
+    def set_video(self, path_or_url: str, kind: str = "video", label: str = "") -> bool:
+        """Stream an uploaded video file or a live stream URL (RTSP/HTTP/webcam).
+
+        Returns True if the source opened successfully.
+        """
+        cap = cv2.VideoCapture(path_or_url)
+        if not cap.isOpened():
+            cap.release()
+            return False
+        with self._lock:
+            self._release_video()
+            self._user_image = None
+            self._user_video = cap
+            self._source_kind = kind
+            self._source_label = label or str(path_or_url)
+        return True
+
+    def reset_source(self) -> None:
+        """Revert to the built-in synthetic simulator (or frame dir)."""
+        with self._lock:
+            self._release_video()
+            self._user_image = None
+            self._source_kind = "simulator"
+            self._source_label = ""
+
+    def _release_video(self) -> None:
+        if self._user_video is not None:
+            try:
+                self._user_video.release()
+            except Exception:
+                pass
+            self._user_video = None
+
+    def source_info(self) -> dict:
+        with self._lock:
+            return {"kind": self._source_kind, "label": self._source_label}
+
     # ------------------------------------------------------------------ #
     def next_unit_id(self) -> str:
         self._counter += 1
@@ -71,9 +128,32 @@ class CameraSimulator:
 
     # ------------------------------------------------------------------ #
     def grab_frame(self, defect_rate: Optional[float] = None) -> Frame:
+        with self._lock:
+            if self._user_image is not None:
+                return Frame(unit_id=self.next_unit_id(), image=self._user_image.copy())
+            if self._user_video is not None:
+                img = self._read_video_frame()
+                if img is not None:
+                    return Frame(unit_id=self.next_unit_id(), image=img)
         if self._files:
             return self._grab_from_dir()
         return self._synthesize(defect_rate if defect_rate is not None else self.defect_rate)
+
+    # ------------------------------------------------------------------ #
+    def _read_video_frame(self) -> Optional[np.ndarray]:
+        """Read the next frame, looping a finite video back to the start."""
+        cap = self._user_video
+        if cap is None:
+            return None
+        ok, img = cap.read()
+        if not ok:
+            # End of a finite file — rewind and retry once. Live streams that
+            # genuinely drop will fall through to the simulator for this tick.
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            ok, img = cap.read()
+            if not ok:
+                return None
+        return cv2.resize(img, (FRAME_W, FRAME_H))
 
     # ------------------------------------------------------------------ #
     def _grab_from_dir(self) -> Frame:

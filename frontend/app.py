@@ -186,6 +186,62 @@ if cc2.button("▶ Resume line", use_container_width=True):
     requests.post(f"{API}/api/control/resume", timeout=4)
 
 # --------------------------------------------------------------------------- #
+# Inspection source — feed your own image / video / live stream
+# --------------------------------------------------------------------------- #
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🎞️ Inspection Source")
+src = api_get("/api/source", default={}) or {}
+src_kind = src.get("kind", "simulator")
+src_label = src.get("label", "")
+if src_kind == "simulator":
+    st.sidebar.caption("Source: built-in conveyor simulator")
+else:
+    st.sidebar.caption(f"Source: **{src_kind}** — {src_label}")
+
+with st.sidebar.expander("Use my own image / video / stream", expanded=False):
+    up = st.file_uploader(
+        "Upload image or video",
+        type=["png", "jpg", "jpeg", "bmp", "webp", "mp4", "avi", "mov", "mkv", "webm"],
+        key="source_upload",
+    )
+    if up is not None and st.button("▶ Run on upload", use_container_width=True):
+        is_video = up.name.lower().rsplit(".", 1)[-1] in (
+            "mp4", "avi", "mov", "mkv", "webm",
+        )
+        endpoint = "/api/source/video" if is_video else "/api/source/image"
+        try:
+            r = requests.post(
+                f"{API}{endpoint}",
+                files={"file": (up.name, up.getvalue(), up.type or "application/octet-stream")},
+                timeout=30,
+            )
+            if r.ok:
+                st.success(f"Now inspecting: {up.name}")
+            else:
+                st.error(r.json().get("detail", "Upload failed"))
+        except Exception as exc:
+            st.error(f"Upload failed: {exc}")
+
+    stream_url = st.text_input(
+        "…or live stream URL",
+        placeholder="rtsp://…  ·  http://…/mjpg  ·  0 (webcam)",
+        key="stream_url",
+    )
+    if stream_url and st.button("▶ Connect stream", use_container_width=True):
+        try:
+            r = requests.post(f"{API}/api/source/stream", json={"url": stream_url}, timeout=15)
+            if r.ok:
+                st.success(f"Streaming from: {stream_url}")
+            else:
+                st.error(r.json().get("detail", "Could not open stream"))
+        except Exception as exc:
+            st.error(f"Stream failed: {exc}")
+
+if src_kind != "simulator" and st.sidebar.button("↺ Back to simulator", use_container_width=True):
+    requests.post(f"{API}/api/source/reset", timeout=4)
+    st.rerun()
+
+# --------------------------------------------------------------------------- #
 # KPI tiles
 # --------------------------------------------------------------------------- #
 stats = api_get("/api/stats", default={}) or {}
