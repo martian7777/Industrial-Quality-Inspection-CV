@@ -8,8 +8,6 @@ name: Deploy to Hugging Face Spaces
 #        - Add secret  HF_TOKEN     = <your HF write token>
 #        - (optional) Add variables HF_USERNAME / HF_SPACE if they differ
 #          from the defaults below.
-# The Space itself is created automatically on the first run — you do NOT
-# need to create it by hand.
 on:
   push:
     branches: [main]
@@ -34,7 +32,7 @@ jobs:
       - name: Install huggingface_hub
         run: pip install "huggingface_hub>=0.25"
 
-      - name: Create Space (if needed) and upload
+      - name: Verify token, ensure Space, and upload
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
@@ -43,21 +41,40 @@ jobs:
             exit 1
           fi
           python - <<'PY'
-          import os
+          import os, sys
           from huggingface_hub import HfApi
+          from huggingface_hub.utils import HfHubHTTPError
 
-          api = HfApi(token=os.environ["HF_TOKEN"])
+          token = os.environ["HF_TOKEN"].strip()
+          api = HfApi(token=token)
+
+          # 1. Prove the token authenticates. A 429/401 here = bad/empty token,
+          #    NOT a real rate limit (anonymous calls get throttled by CloudFront).
+          try:
+              me = api.whoami()
+          except HfHubHTTPError as e:
+              print("::error::Token authentication FAILED. Your HF_TOKEN is invalid, "
+                    "expired, or not a WRITE token. Regenerate a WRITE token at "
+                    "https://huggingface.co/settings/tokens and update the GitHub secret.")
+              print(f"Details: {e}")
+              sys.exit(1)
+          print(f"Authenticated to Hugging Face as: {me.get('name')}")
+          print(f"Token role: {me.get('auth', {}).get('accessToken', {}).get('role', 'unknown')}")
+
           repo_id = f"{os.environ['HF_USERNAME']}/{os.environ['HF_SPACE']}"
 
-          # Auto-create the Docker Space if it doesn't exist yet.
-          api.create_repo(
-              repo_id=repo_id,
-              repo_type="space",
-              space_sdk="docker",
-              exist_ok=True,
-          )
+          # 2. Ensure the Space exists. Tolerate failures so a manually-created
+          #    Space (the reliable fallback) still gets the upload.
+          try:
+              api.create_repo(repo_id, repo_type="space", space_sdk="docker", exist_ok=True)
+              print(f"Space ready: {repo_id}")
+          except HfHubHTTPError as e:
+              print(f"::warning::create_repo failed ({e}). Assuming the Space already "
+                    f"exists. If it does not, create it once at "
+                    f"https://huggingface.co/new-space (SDK = Docker, name = "
+                    f"'{os.environ['HF_SPACE']}'), then re-run this workflow.")
 
-          # Upload the repo contents (huggingface_hub handles retries/backoff).
+          # 3. Upload the repo contents (built-in retries/backoff).
           api.upload_folder(
               repo_id=repo_id,
               repo_type="space",
@@ -70,5 +87,5 @@ jobs:
                   "data/*",
               ],
           )
-          print(f"Deployed to https://huggingface.co/spaces/{repo_id}")
+          print(f"Deployed: https://huggingface.co/spaces/{repo_id}")
           PY
