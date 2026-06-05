@@ -91,6 +91,10 @@ streamlit run app.py                    # http://localhost:8501
 > persistence and the dashboard all work; only the cross-process PLC bridge is
 > inactive. Start a local Mosquitto for the full experience.
 
+<img width="1920" height="862" alt="image" src="https://github.com/user-attachments/assets/fb31a786-ea35-43d0-9495-108173f9db78" />
+<img width="1440" height="685" alt="image" src="https://github.com/user-attachments/assets/81f911cb-fbbb-404f-947e-fa039d49a444" />
+
+
 ## Enabling real YOLO11
 
 ```bash
