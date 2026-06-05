@@ -21,7 +21,7 @@ import random
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 import cv2
 import numpy as np
@@ -131,7 +131,7 @@ class CameraSimulator:
             # Out-of-tolerance shrink/expand of the body.
             actual_radius = int(NOMINAL_RADIUS * random.choice([0.84, 1.16]))
         elif defect_type == "misalignment":
-            cx += random.choice([-55, 55])  # part shifted off the belt centre line
+            cx += random.choice([-130, 130])  # part shifted off the belt centre line
 
         self._draw_bearing(img, cx, cy, actual_radius)
 

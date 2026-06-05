@@ -155,18 +155,33 @@ def detect_stains(image: np.ndarray, cfg: InspectionConfig) -> List[Detection]:
 
 
 def detect_scratches(image: np.ndarray, cfg: InspectionConfig, part_contour) -> List[Detection]:
-    """Thin bright linear features via Canny + probabilistic Hough lines."""
+    """Thin *bright* linear features via Canny + probabilistic Hough lines.
+
+    Scratches reflect light and read much brighter than the brushed-metal
+    texture. We therefore restrict edge detection to bright pixels inside the
+    part, so the part's own radial shading and belt seams never register.
+    """
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    # Mask to the part so belt seams don't register as scratches.
+    # Mask to the (eroded) part so the rim and belt don't register.
     region = np.zeros_like(gray)
     if part_contour is not None:
         cv2.drawContours(region, [part_contour], -1, 255, -1)
-        region = cv2.erode(region, np.ones((9, 9), np.uint8))
-        gray = cv2.bitwise_and(gray, region)
+        region = cv2.erode(region, np.ones((11, 11), np.uint8))
+    else:
+        region[:] = 255
 
-    edges = cv2.Canny(gray, cfg.scratch_canny_low, cfg.scratch_canny_high)
-    lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=30,
-                            minLineLength=35, maxLineGap=6)
+    part_pixels = gray[region > 0]
+    if part_pixels.size == 0:
+        return []
+    # Bright gate: well above the surface mean isolates true scratches.
+    bright_thresh = float(np.clip(part_pixels.mean() + 2.2 * part_pixels.std(), 195, 250))
+    bright = cv2.inRange(gray, int(bright_thresh), 255)
+    bright = cv2.bitwise_and(bright, region)
+    bright = cv2.morphologyEx(bright, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+
+    edges = cv2.Canny(bright, cfg.scratch_canny_low, cfg.scratch_canny_high)
+    lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=22,
+                            minLineLength=30, maxLineGap=8)
     out: List[Detection] = []
     if lines is None:
         return out
@@ -202,7 +217,7 @@ def detect_dimensional(frame: Frame, cfg: InspectionConfig, part_contour) -> Lis
     # Misalignment: centroid far from the frame centre line.
     frame_cx = frame.image.shape[1] / 2.0
     offset = abs(cx - frame_cx) / frame.image.shape[1]
-    if offset > cfg.dimensional_tolerance * 2.5:
+    if offset > cfg.dimensional_tolerance * 2.0:
         conf = min(0.99, 0.55 + offset)
         out.append(Detection(x, y, w, h, "misalignment", conf, "opencv"))
     return out
