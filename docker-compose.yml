@@ -29,12 +29,13 @@ services:
       MQTT_PORT: "1883"
       CAMERA_FPS: "2.0"
       DEFECT_RATE: "0.35"
-      YOLO_ENABLED: "false"
+      YOLO_ENABLED: "true"
+      YOLO_WEIGHTS: "/data/models/yolo11n.pt"
       QI_DATA_DIR: /data
     ports:
       - "8000:8000"
     volumes:
-      - backend_data:/data
+      - ./data:/data
     restart: unless-stopped
 
   frontend:
