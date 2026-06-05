@@ -1,0 +1,42 @@
+name: Deploy to Hugging Face Spaces
+
+# Pushes this repo to your HF Space on every commit to main (and on demand).
+# Setup (one time):
+#   1. Create a Docker Space at https://huggingface.co/new-space (SDK = Docker).
+#   2. Create an HF access token (write) at https://huggingface.co/settings/tokens
+#   3. In GitHub: Settings > Secrets and variables > Actions
+#        - Add secret  HF_TOKEN     = <your HF write token>
+#        - (optional) Add variables HF_USERNAME / HF_SPACE if they differ
+#          from the defaults below.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Edit these defaults OR override them with GitHub repo variables of the same name.
+env:
+  HF_USERNAME: ${{ vars.HF_USERNAME || 'martian7777' }}
+  HF_SPACE: ${{ vars.HF_SPACE || 'industrial-quality-inspection' }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Push to Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          if [ -z "$HF_TOKEN" ]; then
+            echo "::error::HF_TOKEN secret is not set. Add it under repo Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          git config --global user.email "github-actions@users.noreply.github.com"
+          git config --global user.name "github-actions"
+          git push --force \
+            "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${HF_USERNAME}/${HF_SPACE}.git" \
+            HEAD:main

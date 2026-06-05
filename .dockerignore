@@ -1,0 +1,13 @@
+# Keep the HF build context (and image) lean.
+.git
+.github
+**/__pycache__
+**/*.py[cod]
+backend/.pytest_cache
+backend/tests
+data
+infra
+docker-compose.yml
+*.md
+ARCHITECTURE.md
+WIKI.md

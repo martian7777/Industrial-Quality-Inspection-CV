@@ -1,3 +1,13 @@
+---
+title: Industrial Quality Inspection
+emoji: 🏭
+colorFrom: blue
+colorTo: gray
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 <div align="center">
 
 # 🏭 Industrial Quality Inspection System
