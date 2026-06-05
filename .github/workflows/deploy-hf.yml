@@ -17,7 +17,7 @@ on:
 # HF_USERNAME must be your *Hugging Face* username (the token owner),
 # which may differ from your GitHub username. Override via repo variables if so.
 env:
-  HF_USERNAME: ${{ vars.HF_USERNAME || 'martian7777' }}
+  HF_USERNAME: ${{ vars.HF_USERNAME || 'Saqib772' }}
   HF_SPACE: ${{ vars.HF_SPACE || 'industrial-quality-inspection' }}
 
 jobs:
